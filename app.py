@@ -9,13 +9,15 @@ from threading import Lock
 from deep_translator import GoogleTranslator
 import pycountry
 from datetime import datetime, timedelta
+from flask_cors import cross_origin,CORS
 
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
 
 # Set your Google AI API key
-genai.configure(api_key=os.environ.get("GOOGLE_AI_API_KEY"))
+genai.configure(api_key=os.environ.get("AIzaSyAWlWjNkFwVjFagi8NQX4-NCQIBzGSVhuw"))
 cache = {}
 cache_lock = Lock()
 CACHE_TIMEOUT = timedelta(minutes=5)
@@ -26,8 +28,18 @@ def chunk_array_generator(arr):
         yield arr[i : i + 4]
 
 
+LANGUAGE_ALIASES = {
+    "Punjabi": "pa",
+    # Add more aliases if needed
+}
+
 def get_language_code(language_name):
     """Get ISO 639-1 language code from language name."""
+    # First, check if the language name is in the alias dictionary
+    if language_name in LANGUAGE_ALIASES:
+        return LANGUAGE_ALIASES[language_name]
+    
+    # Otherwise, try using pycountry
     try:
         language = pycountry.languages.get(name=language_name)
         return language.alpha_2 if language else None
@@ -82,14 +94,14 @@ def generate_question_and_answer(
     
     Please generate questions and answers following this format."""
 
-    print(prompt)
+    # print(prompt)
     # Use the Gemini Pro model for question generation
     model = genai.GenerativeModel(model_name="gemini-pro")
     response = model.generate_content(prompt)
 
     # Extract the generated text
     generated_text = response.text
-    # print(generated_text)
+    print(generated_text)
 
     if question_type == "mcq":
         # Revised regex patterns
@@ -103,7 +115,7 @@ def generate_question_and_answer(
             re.DOTALL,
         )
         matches = pattern.findall(generated_text)
-        print(matches)
+        # print(matches)
         mcq_data = []
 
         for i in range(len(matches)):
@@ -115,7 +127,7 @@ def generate_question_and_answer(
                     "answer": matches[i][5],
                 }
             )
-        print(mcq_data)
+        # print(mcq_data)
         language_code = get_language_code(language)
         if language_code:
             for item in mcq_data:
@@ -153,24 +165,25 @@ def generate_question_and_answer(
 
             # Translate the questions and answers
         except ValueError as e:
-            print(f"Error processing text: {e}")
+            # print(f"Error processing text: {e}")
             questions = [clean_text(generated_text)]
             answers = ["No answer provided."]
 
         return questions, answers
 
 
-@app.route("/generate-question", methods=["POST"])
+@app.route("/generateQuestionsUsingAi", methods=["POST"])
 def generate_question_endpoint():
     """API endpoint to generate questions and answers."""
+    print("workinggg")
     data = request.json
-    class_name = data.get("ClassName", "")
-    course_name = data.get("CourseName", "")
-    section = data.get("Section", "")
-    subsection = data.get("Subsection", "")
-    language = data.get("Language", "")
-    question_type = data.get("QuestionType", "")
-    Difficulty = data.get("Difficulty", "")
+    class_name = data.get("className", "")
+    course_name = data.get("courseName", "")
+    section = data.get("sectionName", "")
+    subsection = data.get("subSectionName", "")
+    language = data.get("languageName", "")
+    question_type = data.get("type", "")
+    Difficulty = data.get("difficultyName", "")
 
     if not all(
         [
@@ -205,12 +218,12 @@ def generate_question_endpoint():
         ]
         for key in keys_to_remove:
             del cache[key]
-        print(f"Cleared {len(keys_to_remove)} entries from cache")
+        # print(f"Cleared {len(keys_to_remove)} entries from cache")
 
         # Get the previous questions
         cache_entry = cache.get(cache_key, (set(), datetime.now()))
         previous_questions, _ = cache_entry
-    print(f"Previous questions count: {len(previous_questions)}")
+    # print(f"Previous questions count: {len(previous_questions)}")
 
     for attempt in range(5):  # Limit the number of retries
         if question_type == "mcq":
@@ -236,25 +249,7 @@ def generate_question_endpoint():
                     unique_answers.append(a)
                     unique_option.append(o)
                     previous_questions.add(q)
-            # language_code = get_language_code(language)
-            # if language_code:
-            #     for item in mcq_data:
-            #         item["description"] = translate_array_of_strings(
-            #             [item["description"]], language_code
-            #         )[0]
-            #         if "options" in item:
-            #             item["options"] = translate_array_of_strings(
-            #                 item["options"], language_code
-            #             )
-            #         if "answer" in item:
-            #             item["answer"] = translate_array_of_strings(
-            #                 [item["answer"]], language_code
-            #             )[0]
 
-            # else:
-            #     print(
-            #         f"Language '{language}' not found or does not have a valid alpha_2 code."
-            #     )
         else:
             questions, answers = generate_question_and_answer(
                 class_name,
@@ -281,7 +276,7 @@ def generate_question_endpoint():
                 unique_answers = translate_array_of_strings(
                     unique_answers, language_code
                 )
-        print(f"Unique questions found in attempt {attempt + 1}: {unique_questions}")
+        # print(f"Unique questions found in attempt {attempt + 1}: {unique_questions}")
         if unique_questions:
             with cache_lock:
                 cache[cache_key] = (previous_questions, datetime.now())
@@ -294,10 +289,10 @@ def generate_question_endpoint():
                         {
                             "description": q,
                             "options": o,
-                            "correct_answer": a,
+                            "answer": a,
                         }
                     )
-            elif question_type.lower() in ["short", "true/false"]:
+            elif question_type.lower() in ["short", "true false"]:
                 for q, a in zip(unique_questions, unique_answers):
                     result.append({"answer": a, "description": q})
             elif question_type.lower() == "essay":
@@ -312,7 +307,7 @@ def generate_question_endpoint():
             )
 
         # Log retry attempt
-        print(f"No new unique questions found. Retrying generation...")
+        # print(f"No new unique questions found. Retrying generation...")
         time.sleep(1)  # Short delay to avoid rapid retries
 
     return (
@@ -327,4 +322,5 @@ def generate_question_endpoint():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, threaded=True)
+
