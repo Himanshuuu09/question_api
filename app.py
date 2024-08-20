@@ -3,13 +3,12 @@ import os
 import google.generativeai as genai
 from dotenv import load_dotenv
 import re
-import time
-import threading
-from threading import Lock
-from deep_translator import GoogleTranslator
-import pycountry
 from datetime import datetime, timedelta
-from flask_cors import cross_origin,CORS
+from flask_cors import CORS
+from deep_translator import GoogleTranslator
+from cachetools import TTLCache
+from pycountry import languages
+import asyncio
 
 load_dotenv()
 
@@ -17,166 +16,103 @@ app = Flask(__name__)
 CORS(app)
 
 # Set your Google AI API key
-genai.configure(api_key=os.environ.get("AIzaSyAWlWjNkFwVjFagi8NQX4-NCQIBzGSVhuw"))
-cache = {}
-cache_lock = Lock()
+genai.configure(api_key=os.environ.get("GOOGLE_AI_API_KEY"))
+
+# Set up cache
+cache = TTLCache(maxsize=100, ttl=300)  # LRU Cache with TTL
 CACHE_TIMEOUT = timedelta(minutes=5)
 
-
-def chunk_array_generator(arr):
-    for i in range(0, len(arr), 4):
-        yield arr[i : i + 4]
-
-
+# Translation cache
+translation_cache = TTLCache(maxsize=1000, ttl=CACHE_TIMEOUT.total_seconds())
 LANGUAGE_ALIASES = {
     "Punjabi": "pa",
     # Add more aliases if needed
 }
 
+# Compile regex patterns once
+mcq_pattern = re.compile(
+    r'\{\s*"question":\s*"([^"]*)",\s*'
+    r'"option1":\s*"([^"]*)",\s*'
+    r'"option2":\s*"([^"]*)",\s*'
+    r'"option3":\s*"([^"]*)",\s*'
+    r'"option4":\s*"([^"]*)",\s*'
+    r'"answer":\s*"([^"]*)"\s*\}',
+    re.DOTALL,
+)
+
+tf_pattern = re.compile(
+    r'\{\s*"question":\s*"([^"]*)",\s*'
+    r'"answer":\s*"([^"]*)"\s*\}',
+    re.DOTALL,
+)
+
 def get_language_code(language_name):
     """Get ISO 639-1 language code from language name."""
-    # First, check if the language name is in the alias dictionary
+    language_name=language_name.lower()
+    LANGUAGE_ALIASES = {"punjabi": "pa"}
     if language_name in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[language_name]
     
-    # Otherwise, try using pycountry
     try:
-        language = pycountry.languages.get(name=language_name)
+        language = languages.get(name=language_name)
         return language.alpha_2 if language else None
-    except KeyError:
+    except LookupError:
         return None
 
+async def translate_text(text, target_language):
+    """Translate a single text string into the target language."""
+    cache_key = (text, target_language)
+    if cache_key in translation_cache:
+        return translation_cache[cache_key]
+    try:
+        translator = GoogleTranslator(source="auto", target=target_language)
+        translation = translator.translate(text)
+        translation_cache[cache_key] = translation
+        return translation
+    except Exception as e:
+        print(f"Translation failed for '{text}': {e}")
+        return text
 
-def translate_array_of_strings(text_array, target_language):
+async def translate_array_of_strings(text_array, target_language):
     """Translate an array of strings into the target language."""
-    translated_texts = []
-    for text in text_array:
-        try:
-            translation = GoogleTranslator(
-                source="auto", target=target_language
-            ).translate(text)
-            translated_texts.append(translation)
-        except Exception as e:
-            print(f"Translation failed for '{text}': {e}")
-            translated_texts.append(text)  # Append original text if translation fails
-    return translated_texts
+    tasks = [translate_text(text, target_language) for text in text_array]
+    return await asyncio.gather(*tasks)
 
-
-def clean_text(text):
-    """Remove unwanted characters from text."""
-    text = re.sub(r"\*\*", "", text)  # Remove asterisks
-    return text.strip()
-
-
-def generate_question_and_answer(
-    class_name, course_name, section, subsection, language, question_type, Difficulty
-):
+def generate_question_and_answer(class_name, course_name, section, subsection, language, question_type, Difficulty):
     """Generates questions and answers using the Gemini Pro model."""
-    if question_type == "mcq":
-
-        prompt = f"""Design a mcq type for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in English.Convert into json format under heading question,option1,option2,option3,option4,answer. 
-    . Give answer as correct answer not as option. Give 25 questions."
-"""
+    if question_type == "true false":
+      prompt = f"""Design a (true false) type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,answer. Give answer as correct answer not as option. Give 10 questions."""
+      pattern = tf_pattern
     else:
-        prompt = f"""Act as a rigorous examiner:
-    Create 25 challenging {question_type} type questions and their corresponding answers in English on the topic of {course_name}, specifically focusing on the {section} section and {subsection} subsection. The difficulty level should be {Difficulty}. 
-    Ensure that each question is clearly stated followed immediately by its answer in the format shown below:
-    
-    **Question:** [Question text here]
-    **Answer:** [Answer text here]
-    
-    Example:
-    **Question:** Find the rank of the matrix A = [1 2 3; 4 5 6; 7 8 9].
-    **Answer:** 3
-    
-    **Question:** Solve the system of equations: x + 2y - z = 0, 2x + 3y + z = 4, x - y + 2z = 3.
-    **Answer:** x = 1, y = 2, z = 1
-    
-    Please generate questions and answers following this format."""
-
-    # print(prompt)
-    # Use the Gemini Pro model for question generation
+      prompt = f"""Design a mcq type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,option1,option2,option3,option4,answer. Give answer as correct answer not as option. Give 10 questions."""
+      pattern = mcq_pattern
     model = genai.GenerativeModel(model_name="gemini-pro")
     response = model.generate_content(prompt)
-
-    # Extract the generated text
     generated_text = response.text
-    print(generated_text)
+    # print(generated_text)
+    matches = pattern.findall(generated_text)
+    mcq_data = []
 
-    if question_type == "mcq":
-        # Revised regex patterns
-        pattern = re.compile(
-            r'\{\s*"question":\s*"([^"]*)",\s*'
-            r'"option1":\s*"([^"]*)",\s*'
-            r'"option2":\s*"([^"]*)",\s*'
-            r'"option3":\s*"([^"]*)",\s*'
-            r'"option4":\s*"([^"]*)",\s*'
-            r'"answer":\s*"([^"]*)"\s*\}',
-            re.DOTALL,
-        )
-        matches = pattern.findall(generated_text)
-        # print(matches)
-        mcq_data = []
+    for match in matches:
+        if question_type == "true false":
+            mcq_data.append({
+                "description": match[0],
+                "answer": match[1],
+            })
+        else:
+            mcq_data.append({
+                "description": match[0],
+                "options": match[1:5],
+                "answer": match[5],
+            })
 
-        for i in range(len(matches)):
+    return mcq_data
 
-            mcq_data.append(
-                {
-                    "description": matches[i][0],
-                    "options": matches[i][1:5],
-                    "answer": matches[i][5],
-                }
-            )
-        # print(mcq_data)
-        language_code = get_language_code(language)
-        if language_code:
-            for item in mcq_data:
-                item["description"] = translate_array_of_strings(
-                    [item["description"]], language_code
-                )[0]
-                if "options" in item:
-                    item["options"] = translate_array_of_strings(
-                        item["options"], language_code
-                    )
-                if "answer" in item:
-                    item["answer"] = translate_array_of_strings(
-                        [item["answer"]], language_code
-                    )[0]
+async def process_questions(data):
+    """Process questions asynchronously."""
+    global cache  # Declare as global to modify the global variable
+    global translation_cache  # Declare as global to modify the global variable
 
-        return mcq_data
-    else:
-        try:
-            question_pattern = re.compile(
-                r"\*\*Question:\*\*\s*(.*?)\s*(?=\*\*Answer:\*\*|$)",
-                re.DOTALL | re.MULTILINE,
-            )
-
-            answer_pattern = re.compile(
-                r"\*\*Answer:\*\*\s*(.*?)\s*(?=\*\*Question:\*\*|$)",
-                re.DOTALL | re.MULTILINE,
-            )
-            questions = [
-                clean_text(question)
-                for question in question_pattern.findall(generated_text)
-            ]
-            answers = [
-                clean_text(answer) for answer in answer_pattern.findall(generated_text)
-            ]
-
-            # Translate the questions and answers
-        except ValueError as e:
-            # print(f"Error processing text: {e}")
-            questions = [clean_text(generated_text)]
-            answers = ["No answer provided."]
-
-        return questions, answers
-
-
-@app.route("/generateQuestionsUsingAi", methods=["POST"])
-def generate_question_endpoint():
-    """API endpoint to generate questions and answers."""
-    print("workinggg")
-    data = request.json
     class_name = data.get("className", "")
     course_name = data.get("courseName", "")
     section = data.get("sectionName", "")
@@ -185,142 +121,64 @@ def generate_question_endpoint():
     question_type = data.get("type", "")
     Difficulty = data.get("difficultyName", "")
 
-    if not all(
-        [
-            class_name,
-            course_name,
-            section,
-            subsection,
-            language,
-            question_type,
-            Difficulty,
-        ]
-    ):
-        return jsonify({"error": "Missing data"}), 400
+    if not all([class_name, course_name, section, subsection, language, question_type, Difficulty]):
+        return {"error": "Missing data"}, 400
 
-    cache_key = (
-        class_name,
-        course_name,
-        section,
-        subsection,
-        language,
-        question_type,
-        Difficulty,
-    )
+    cache_key = (class_name, course_name, section, subsection, language, question_type, Difficulty)
 
-    with cache_lock:
-        # Clean expired cache entries
-        now = datetime.now()
-        keys_to_remove = [
-            key
-            for key, (_, timestamp) in cache.items()
-            if now - timestamp > CACHE_TIMEOUT
-        ]
-        for key in keys_to_remove:
-            del cache[key]
-        # print(f"Cleared {len(keys_to_remove)} entries from cache")
+    # Clean expired cache entries
+    now = datetime.now()
+    cache = {key: value for key, value in cache.items() if now - value[1] <= CACHE_TIMEOUT}
 
-        # Get the previous questions
-        cache_entry = cache.get(cache_key, (set(), datetime.now()))
-        previous_questions, _ = cache_entry
-    # print(f"Previous questions count: {len(previous_questions)}")
+    # Get the previous questions
+    previous_questions, _ = cache.get(cache_key, (set(), datetime.now()))
 
     for attempt in range(5):  # Limit the number of retries
-        if question_type == "mcq":
-            mcq_data = generate_question_and_answer(
-                class_name,
-                course_name,
-                section,
-                subsection,
-                language,
-                question_type,
-                Difficulty,
-            )
+        mcq_data = generate_question_and_answer(class_name, course_name, section, subsection, language, question_type, Difficulty)
+        unique_questions = set()
+        unique_answers = []
+        unique_option = []
 
-            unique_questions = []
-            unique_answers = []
-            unique_option = []
-            for item in mcq_data:
-                q = item["description"]
-                a = item["answer"]
+        for item in mcq_data:
+            q = item["description"]
+            a = item["answer"]
+            if question_type != "true false":
                 o = item["options"]
-                if q not in previous_questions and len(unique_questions) < 10:
-                    unique_questions.append(q)
-                    unique_answers.append(a)
+
+            if q not in previous_questions and len(unique_questions) < 10:
+                unique_questions.add(q)
+                unique_answers.append(a)
+                if question_type != "true false":
                     unique_option.append(o)
-                    previous_questions.add(q)
+                previous_questions.add(q)
 
-        else:
-            questions, answers = generate_question_and_answer(
-                class_name,
-                course_name,
-                section,
-                subsection,
-                language,
-                question_type,
-                Difficulty,
-            )
-
-            unique_questions = []
-            unique_answers = []
-            for q, a in zip(questions, answers):
-                if q not in previous_questions and len(unique_questions) < 10:
-                    unique_questions.append(q)
-                    unique_answers.append(a)
-                    previous_questions.add(q)
-            language_code = get_language_code(language)
-            if language_code:
-                unique_questions = translate_array_of_strings(
-                    unique_questions, language_code
-                )
-                unique_answers = translate_array_of_strings(
-                    unique_answers, language_code
-                )
-        # print(f"Unique questions found in attempt {attempt + 1}: {unique_questions}")
         if unique_questions:
-            with cache_lock:
-                cache[cache_key] = (previous_questions, datetime.now())
-
-            # Prepare response according to question type
+            cache[cache_key] = (previous_questions, datetime.now())
             result = []
             if question_type.lower() == "mcq":
                 for q, a, o in zip(unique_questions, unique_answers, unique_option):
-                    result.append(
-                        {
-                            "description": q,
-                            "options": o,
-                            "answer": a,
-                        }
-                    )
+                    result.append({
+                        "description": q,
+                        "options": o,
+                        "answer": a,
+                    })
             elif question_type.lower() in ["short", "true false"]:
                 for q, a in zip(unique_questions, unique_answers):
                     result.append({"answer": a, "description": q})
             elif question_type.lower() == "essay":
                 for q in unique_questions:
                     result.append({"description": q})
+            return {"result": result, "message": "all questions", "success": True}, 200
 
-            return (
-                jsonify(
-                    {"result": result, "message": "all questions", "success": True}
-                ),
-                200,
-            )
+        await asyncio.sleep(1)  # Short delay to avoid rapid retries
+    return {"success": False, "message": "No new unique questions found after multiple attempts"}, 500
 
-        # Log retry attempt
-        # print(f"No new unique questions found. Retrying generation...")
-        time.sleep(1)  # Short delay to avoid rapid retries
-
-    return (
-        jsonify(
-            {
-                "success": False,
-                "message": "No new unique questions found after multiple attempts",
-            }
-        ),
-        500,
-    )
-
+@app.route("/generateQuestionsUsingAi", methods=["POST"])
+def generate_question_endpoint():
+    """API endpoint to generate questions and answers."""
+    data = request.json
+    response, status_code = asyncio.run(process_questions(data))
+    return jsonify(response), status_code
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
-
