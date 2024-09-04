@@ -133,7 +133,7 @@ async def process_questions(data):
     # Get the previous questions
     previous_questions, _ = cache.get(cache_key, (set(), datetime.now()))
 
-    for attempt in range(5):  # Limit the number of retries
+    for attempt in range(15):  # Limit the number of retries
         mcq_data = generate_question_and_answer(class_name, course_name, section, subsection, language, question_type, Difficulty)
         unique_questions = set()
         unique_answers = []
