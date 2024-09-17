@@ -89,7 +89,7 @@ def generate_question_and_answer(class_name, course_name, section, subsection, l
     model = genai.GenerativeModel(model_name="gemini-pro")
     response = model.generate_content(prompt)
     generated_text = response.text
-    # print(generated_text)
+    print(generated_text)
     matches = pattern.findall(generated_text)
     mcq_data = []
 
