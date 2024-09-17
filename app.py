@@ -81,10 +81,10 @@ async def translate_array_of_strings(text_array, target_language):
 def generate_question_and_answer(class_name, course_name, section, subsection, language, question_type, Difficulty):
     """Generates questions and answers using the Gemini Pro model."""
     if question_type == "true false":
-      prompt = f"""Design a (true false) type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,answer. Give answer as correct answer not as option. Give 10 questions."""
+      prompt = f"""Design a (true false) type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,answer. Give answer as correct answer not as option. Give 20 questions."""
       pattern = tf_pattern
     else:
-      prompt = f"""Design a mcq type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,option1,option2,option3,option4,answer. Give answer as correct answer not as option. Give 10 questions."""
+      prompt = f"""Design a mcq type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,option1,option2,option3,option4,answer. Give answer as correct answer not as option. Give 20 questions."""
       pattern = mcq_pattern
     model = genai.GenerativeModel(model_name="gemini-pro")
     response = model.generate_content(prompt)
@@ -133,7 +133,7 @@ async def process_questions(data):
     # Get the previous questions
     previous_questions, _ = cache.get(cache_key, (set(), datetime.now()))
 
-    for attempt in range(5):  # Limit the number of retries
+    for attempt in range(15):  # Limit the number of retries
         mcq_data = generate_question_and_answer(class_name, course_name, section, subsection, language, question_type, Difficulty)
         unique_questions = set()
         unique_answers = []
