@@ -7,8 +7,10 @@ from datetime import datetime, timedelta
 from flask_cors import CORS
 from deep_translator import GoogleTranslator
 from cachetools import TTLCache
-from pycountry import languages
+import pycountry
 import asyncio
+from deep_translator import GoogleTranslator
+import langcodes
 
 load_dotenv()
 
@@ -46,45 +48,60 @@ tf_pattern = re.compile(
     re.DOTALL,
 )
 
+
+
+
+LANGUAGE_ALIASES = {
+    "punjabi": "pa",
+    "english": "en",
+    "spanish": "es",
+    "french": "fr",
+    "german": "de",
+    "italian": "it",
+    "chinese": "zh",
+    "japanese": "ja",
+    "korean": "ko",
+    "russian": "ru",
+    "hindi": "hi",
+    "arabic": "ar",
+    "sindhi": "sd",  # Added Sindhi
+    # Add more languages as needed
+}
+
 def get_language_code(language_name):
-    """Get ISO 639-1 language code from language name."""
-    language_name=language_name.lower()
-    LANGUAGE_ALIASES = {"punjabi": "pa"}
+    # Check if the language name exists in LANGUAGE_ALIASES
     if language_name in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[language_name]
     
+    # Use langcodes to get the ISO code if it's not in aliases
     try:
-        language = languages.get(name=language_name)
-        return language.alpha_2 if language else None
-    except LookupError:
+        lang = langcodes.get(language_name)
+        return lang.language
+    except Exception:
         return None
 
-async def translate_text(text, target_language):
-    """Translate a single text string into the target language."""
-    cache_key = (text, target_language)
-    if cache_key in translation_cache:
-        return translation_cache[cache_key]
-    try:
-        translator = GoogleTranslator(source="auto", target=target_language)
-        translation = translator.translate(text)
-        translation_cache[cache_key] = translation
-        return translation
-    except Exception as e:
-        print(f"Translation failed for '{text}': {e}")
-        return text
+def translate_sentence(sentence, target_language):
+    # Get the target language code
+    target_lang_code = get_language_code(target_language.lower())
+    
+    if not target_lang_code:
+        return f"Language '{target_language}' is not supported."
 
-async def translate_array_of_strings(text_array, target_language):
-    """Translate an array of strings into the target language."""
-    tasks = [translate_text(text, target_language) for text in text_array]
-    return await asyncio.gather(*tasks)
+    try:
+        # Translate the sentence
+        translated = GoogleTranslator(source='auto', target=target_lang_code).translate(sentence)
+        return translated
+    except Exception as e:
+        return f"An error occurred: {e}"
+ 
 
 def generate_question_and_answer(class_name, course_name, section, subsection, language, question_type, Difficulty):
     """Generates questions and answers using the Gemini Pro model."""
     if question_type == "true false":
-      prompt = f"""Design a (true false) type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,answer. Give answer as correct answer not as option. Give 20 questions."""
+      prompt = f"""Design a (true false) type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,answer. Give answer as correct answer not as option. Give 25 questions."""
       pattern = tf_pattern
     else:
-      prompt = f"""Design a mcq type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,option1,option2,option3,option4,answer. Give answer as correct answer not as option. Give 20 questions."""
+      prompt = f"""Design a mcq type quiz for {course_name} {class_name} studying {subsection}. The quiz should focus on {section}. Questions should be {Difficulty} level to understand and written in {language}. Convert into json format under heading question,option1,option2,option3,option4,answer. Give answer as correct answer not as option. Give 25 questions."""
       pattern = mcq_pattern
     model = genai.GenerativeModel(model_name="gemini-pro")
     response = model.generate_content(prompt)
@@ -118,8 +135,11 @@ async def process_questions(data):
     section = data.get("sectionName", "")
     subsection = data.get("subSectionName", "")
     language = data.get("languageName", "")
+    language1=data.get("languageName1", "")
     question_type = data.get("type", "")
     Difficulty = data.get("difficultyName", "")
+    
+
 
     if not all([class_name, course_name, section, subsection, language, question_type, Difficulty]):
         return {"error": "Missing data"}, 400
@@ -133,7 +153,7 @@ async def process_questions(data):
     # Get the previous questions
     previous_questions, _ = cache.get(cache_key, (set(), datetime.now()))
 
-    for attempt in range(15):  # Limit the number of retries
+    for attempt in range(20):  # Limit the number of retries
         mcq_data = generate_question_and_answer(class_name, course_name, section, subsection, language, question_type, Difficulty)
         unique_questions = set()
         unique_answers = []
@@ -154,21 +174,40 @@ async def process_questions(data):
 
         if unique_questions:
             cache[cache_key] = (previous_questions, datetime.now())
-            result = []
+            lang1 = []
+            lang2=[]
             if question_type.lower() == "mcq":
                 for q, a, o in zip(unique_questions, unique_answers, unique_option):
-                    result.append({
+                    ques = translate_sentence(q, language1)
+                    ans = translate_sentence(q, language1)
+                    opt = translate_sentence(q, language1)
+                    lang2.append({
+                        "description": ques,
+                        "options": ans,
+                        "answer": opt,
+
+                    })
+                    lang1.append({
                         "description": q,
                         "options": o,
                         "answer": a,
                     })
             elif question_type.lower() in ["short", "true false"]:
                 for q, a in zip(unique_questions, unique_answers):
-                    result.append({"answer": a, "description": q})
+                    ques = translate_sentence(q, language1)
+                    ans = translate_sentence(q, language1)
+                    lang2.append({"answer": ans, "description": ques})
+                    lang1.append({"answer": a, "description": q})
             elif question_type.lower() == "essay":
                 for q in unique_questions:
-                    result.append({"description": q})
-            return {"result": result, "message": "all questions", "success": True}, 200
+                    ques = translate_sentence(q, language1)
+                    lang2.append({"description": ques})
+                    lang1.append({"description": q})
+            
+            print()
+
+            return {"result": lang1,"result1":lang2, "message": "all questions", "success": True}, 200
+
 
         await asyncio.sleep(1)  # Short delay to avoid rapid retries
     return {"success": False, "message": "No new unique questions found after multiple attempts"}, 500
