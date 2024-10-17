@@ -115,6 +115,7 @@ def generate_question_and_answer(class_name, course_name, section, subsection, l
     response = model.generate_content(prompt)
     generated_text = response.text
     print(generated_text)
+    
     matches = pattern.findall(generated_text)
     mcq_data = []
 
@@ -132,6 +133,7 @@ def generate_question_and_answer(class_name, course_name, section, subsection, l
             })
 
     return mcq_data
+
 
 async def process_questions(data):
     """Process questions asynchronously."""
@@ -183,38 +185,39 @@ async def process_questions(data):
         if unique_questions:
             cache[cache_key] = (previous_questions, datetime.now())
             lang1 = []
-            lang2=[]
             if question_type.lower() == "mcq":
                 for q, a, o in zip(unique_questions, unique_answers, unique_option):
                     ques = translate_sentence(q, language1)
                     ans = translate_sentence(a, language1)
                     opt = [translate_sentence(option, language1) for option in o]
-                    lang2.append({
-                        "description": ques,
-                        "options": opt,
-                        "answer": ans,
-
-                    })
                     lang1.append({
                         "description": q,
+                        "description1": ques,
                         "options": o,
+                        "options1": opt,
                         "answer": a,
+                        "answer1": ans,
+
                     })
             elif question_type.lower() in ["short", "true false"]:
                 for q, a in zip(unique_questions, unique_answers):
                     ques = translate_sentence(q, language1)
                     ans = translate_sentence(a, language1)
-                    lang2.append({"answer": ans, "description": ques})
-                    lang1.append({"answer": a, "description": q})
+                    lang1.append({"answer": a, 
+                                  "answer1": ans,
+                                  "description": q,
+                                  "description1": ques
+                                  })
+                                  
             elif question_type.lower() == "essay":
                 for q in unique_questions:
                     ques = translate_sentence(q, language1)
-                    lang2.append({"description": ques})
-                    lang1.append({"description": q})
+                    lang1.append({"description": q,
+                                  "description1": ques})
             
             print()
 
-            return {"result": lang1,"result1":lang2, "message": "all questions", "success": True}, 200
+            return {"result": lang1, "message": "all questions", "success": True}, 200
 
 
         await asyncio.sleep(1)  # Short delay to avoid rapid retries
