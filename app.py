@@ -49,8 +49,6 @@ tf_pattern = re.compile(
 )
 
 
-
-
 LANGUAGE_ALIASES = {
     "punjabi": "pa",
     "english": "en",
@@ -80,6 +78,9 @@ def get_language_code(language_name):
     except Exception:
         return None
 
+def chunk_text(text, chunk_size=5000):
+    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+
 def translate_sentence(sentence, target_language):
     # Get the target language code
     target_lang_code = get_language_code(target_language.lower())
@@ -88,9 +89,16 @@ def translate_sentence(sentence, target_language):
         return f"Language '{target_language}' is not supported."
 
     try:
-        # Translate the sentence
-        translated = GoogleTranslator(source='auto', target=target_lang_code).translate(sentence)
-        return translated
+        # If sentence is too long, split it into smaller chunks
+        if len(sentence) > 5000:
+            chunks = chunk_text(sentence)
+            translated_chunks = [
+                GoogleTranslator(source='auto', target=target_lang_code).translate(chunk)
+                for chunk in chunks
+            ]
+            return ''.join(translated_chunks)
+        else:
+            return GoogleTranslator(source='auto', target=target_lang_code).translate(sentence)
     except Exception as e:
         return f"An error occurred: {e}"
  
@@ -179,12 +187,12 @@ async def process_questions(data):
             if question_type.lower() == "mcq":
                 for q, a, o in zip(unique_questions, unique_answers, unique_option):
                     ques = translate_sentence(q, language1)
-                    ans = translate_sentence(q, language1)
-                    opt = translate_sentence(q, language1)
+                    ans = translate_sentence(a, language1)
+                    opt = [translate_sentence(option, language1) for option in o]
                     lang2.append({
                         "description": ques,
-                        "options": ans,
-                        "answer": opt,
+                        "options": opt,
+                        "answer": ans,
 
                     })
                     lang1.append({
@@ -195,7 +203,7 @@ async def process_questions(data):
             elif question_type.lower() in ["short", "true false"]:
                 for q, a in zip(unique_questions, unique_answers):
                     ques = translate_sentence(q, language1)
-                    ans = translate_sentence(q, language1)
+                    ans = translate_sentence(a, language1)
                     lang2.append({"answer": ans, "description": ques})
                     lang1.append({"answer": a, "description": q})
             elif question_type.lower() == "essay":
