@@ -145,7 +145,7 @@ async def process_questions(data):
     section = data.get("sectionName", "")
     subsection = data.get("subSectionName", "")
     language = data.get("languageName", "")
-    language1=data.get("languageName1", "")
+    language1 = data.get("languageName1", None)
     question_type = data.get("type", "")
     Difficulty = data.get("difficultyName", "")
     
@@ -187,10 +187,11 @@ async def process_questions(data):
             lang1 = []
             if question_type.lower() == "mcq":
                 for q, a, o in zip(unique_questions, unique_answers, unique_option):
-                    ques = translate_sentence(q, language1)
-                    ans = translate_sentence(a, language1)
-                    opt = [translate_sentence(option, language1) for option in o]
-                    lang1.append({
+                    if language1 is not None:
+                        ques = translate_sentence(q, language1)
+                        ans = translate_sentence(a, language1)
+                        opt = [translate_sentence(option, language1) for option in o]
+                        lang1.append({
                         "description": q,
                         "description1": ques,
                         "options": o,
@@ -199,21 +200,38 @@ async def process_questions(data):
                         "answer1": ans,
 
                     })
+                    else:
+                        lang1.append({
+                        "description": q,
+                        "options": o,
+                        "answer": a,
+
+                    })
+
             elif question_type.lower() in ["short", "true false"]:
                 for q, a in zip(unique_questions, unique_answers):
-                    ques = translate_sentence(q, language1)
-                    ans = translate_sentence(a, language1)
-                    lang1.append({"answer": a, 
+                    if language1 is not None:
+                        ques = translate_sentence(q, language1)
+                        ans = translate_sentence(a, language1)
+                        lang1.append({"answer": a, 
                                   "answer1": ans,
                                   "description": q,
                                   "description1": ques
                                   })
+                    else:
+                        lang1.append({"answer": a, 
+                                  "description": q,
+                                  })
+
                                   
             elif question_type.lower() == "essay":
                 for q in unique_questions:
-                    ques = translate_sentence(q, language1)
-                    lang1.append({"description": q,
+                    if language1 is not None:
+                        ques = translate_sentence(q, language1)
+                        lang1.append({"description": q,
                                   "description1": ques})
+                    else:
+                        lang1.append({"description": q})
             
             print()
 
